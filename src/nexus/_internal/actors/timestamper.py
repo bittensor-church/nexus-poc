@@ -270,7 +270,7 @@ class TimestamperActor[Input, Output](Actor):
 
         """
         with self.context_store.get_context(ctx_id) as ctx:
-            started_at = ctx.user_data.get(self.spec.processing_started_at_user_data_key)
+            started_at = ctx.copy_user_data().get(self.spec.processing_started_at_user_data_key)
             if not isinstance(started_at, datetime):
                 raise InternalStateCorruptionException(
                     "Processing start timestamp missing or invalid in context user_data for "

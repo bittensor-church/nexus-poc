@@ -178,19 +178,25 @@ class Context:
     _context_store: ContextStore
 
     @property
-    def id(self):
+    def id(self) -> ContextId:
         return self._id
 
-    @property
-    def payload(self):
+    def copy_payload(self) -> Any:
+        """
+        Return a deep copy of the context's current payload.
+        """
         return copy.deepcopy(self._payload)
 
-    @property
-    def user_data(self):
+    def copy_user_data(self) -> dict[str, Any]:
+        """
+        Return a deep copy of the context's current user data.
+        """
         return copy.deepcopy(self._user_data)
 
-    @property
-    def parent_contexts(self) -> tuple[ParentContextSnapshot, ...]:
+    def copy_parent_context_snapshots(self) -> tuple[ParentContextSnapshot, ...]:
+        """
+        Return deep copies of the parent snapshots captured when this context was created.
+        """
         return copy.deepcopy(self._parent_contexts)
 
     @property
@@ -267,7 +273,8 @@ class ContextStore:
     user requests are batched together to be processed as a single unit, and a child context
     is created to represent the processing of the batch. Later on, the child context can
     be scattered again to return individual responses to each individual user request. Multi-parent children
-    keep empty payload/user data and expose creation-time parent snapshots through Context.parent_contexts.
+    keep empty payload/user data and expose creation-time parent snapshots through
+    Context.copy_parent_context_snapshots().
 
     The scatter-gather operations are realized by contexts having parent-children relationships.
     When a context is created with parent contexts, a log entry is appended to each parent
@@ -442,8 +449,8 @@ class ContextStore:
                 parent_snapshots.append(
                     ParentContextSnapshot(
                         ctx_id=parent_context.id,
-                        payload=parent_context.payload,
-                        user_data=parent_context.user_data,
+                        payload=parent_context.copy_payload(),
+                        user_data=parent_context.copy_user_data(),
                     )
                 )
 
@@ -502,7 +509,7 @@ class ContextStore:
 
         """
         with self.get_context(ctx_id) as context:
-            value = context.user_data.get(key)
+            value = context.copy_user_data().get(key)
 
         if value is None:
             raise InternalStateCorruptionException(f"Missing context user_data for ctx={ctx_id}, key={key!r}.")

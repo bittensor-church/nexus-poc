@@ -86,7 +86,7 @@ def test_presigned_url_creator_put_generates_put_url_and_upload_succeeds(
     assert f"/{default_test_s3_bucket}/" in presigned_url
 
     with setup.runtime.context_store.get_context(ctx_id) as context:
-        s3_key = context.user_data[creator.id]
+        s3_key = context.copy_user_data()[creator.id]
         assert uuid.UUID(s3_key).version == 7
         assert s3_key in presigned_url
 
@@ -121,7 +121,7 @@ def test_presigned_url_creator_get_generates_get_url_and_download_succeeds(
     presigned_url = request_info.presigned_url
 
     with setup.runtime.context_store.get_context(ctx_id) as context:
-        s3_key = context.user_data[creator.id]
+        s3_key = context.copy_user_data()[creator.id]
         assert uuid.UUID(s3_key).version == 7
         assert s3_key in presigned_url
 
@@ -162,8 +162,9 @@ def test_presigned_url_creator_get_uses_existing_context_key_when_load_s3_key_se
     assert expected_s3_key in presigned_url
 
     with setup.runtime.context_store.get_context(ctx_id) as context:
-        assert context.user_data[context_key] == expected_s3_key
-        assert creator.id not in context.user_data
+        user_data = context.copy_user_data()
+        assert user_data[context_key] == expected_s3_key
+        assert creator.id not in user_data
 
     download_data = b"payload-existing-key-get"
     admin_client.put_object(Bucket=default_test_s3_bucket, Key=expected_s3_key, Body=download_data)
@@ -202,8 +203,9 @@ def test_presigned_url_creator_put_uses_existing_context_key_when_load_s3_key_se
     assert expected_s3_key in presigned_url
 
     with setup.runtime.context_store.get_context(ctx_id) as context:
-        assert context.user_data[context_key] == expected_s3_key
-        assert creator.id not in context.user_data
+        user_data = context.copy_user_data()
+        assert user_data[context_key] == expected_s3_key
+        assert creator.id not in user_data
 
     upload_data = b"payload-existing-key-put"
     status, _ = _request_url("PUT", presigned_url, body=upload_data)
@@ -242,8 +244,9 @@ def test_presigned_url_creator_does_not_create_new_key_when_load_s3_key_set(
     assert expected_s3_key in presigned_url
 
     with setup.runtime.context_store.get_context(ctx_id) as context:
-        assert context.user_data[context_key] == expected_s3_key
-        assert creator.id not in context.user_data
+        user_data = context.copy_user_data()
+        assert user_data[context_key] == expected_s3_key
+        assert creator.id not in user_data
 
 
 @pytest.mark.parametrize("invalid_expiration", [0, -1])

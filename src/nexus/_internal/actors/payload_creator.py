@@ -115,7 +115,7 @@ class PresignedUrlCreatorActor[Input](TransformActor[Input, WithPresignedUrl[Inp
     @override
     def _transform(self, ctx: Context, payload: Input) -> WithPresignedUrl[Input]:
         if self.creator_spec.load_s3_key is not None:
-            s3_key = ctx.user_data[self.creator_spec.load_s3_key]
+            s3_key = ctx.copy_user_data()[self.creator_spec.load_s3_key]
         else:
             s3_key = str(uuid.uuid7())
             ctx.set_user_data(str(self.spec.id), s3_key)

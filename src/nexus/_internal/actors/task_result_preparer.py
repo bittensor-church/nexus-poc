@@ -153,9 +153,10 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
                 ),
             )
 
+        user_data = ctx.copy_user_data()
         if (
-            self._pending_successful_result_user_data_key in ctx.user_data
-            and ctx.user_data[self._pending_successful_result_user_data_key] is not None
+            self._pending_successful_result_user_data_key in user_data
+            and user_data[self._pending_successful_result_user_data_key] is not None
         ):
             return (
                 SendEvent(
@@ -181,7 +182,8 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
         ctx: Context,
         event: ReceiveEvent[ExecutorPublicOutput],
     ) -> MessagesToSend:
-        if self._pending_successful_result_user_data_key not in ctx.user_data:
+        user_data = ctx.copy_user_data()
+        if self._pending_successful_result_user_data_key not in user_data:
             return (
                 SendEvent(
                     ctx_id=ctx.id,
@@ -191,7 +193,7 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
                     ),
                 ),
             )
-        pending_result = ctx.user_data[self._pending_successful_result_user_data_key]
+        pending_result = user_data[self._pending_successful_result_user_data_key]
         if not isinstance(pending_result, Timestamped):
             return (
                 SendEvent(
@@ -222,7 +224,7 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
         ctx: Context,
         event: ReceiveEvent[NexusException],
     ) -> MessagesToSend:
-        if self._pending_successful_result_user_data_key in ctx.user_data:
+        if self._pending_successful_result_user_data_key in ctx.copy_user_data():
             ctx.set_user_data(self._pending_successful_result_user_data_key, None)
         return (
             SendEvent(

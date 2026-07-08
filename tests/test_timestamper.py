@@ -38,7 +38,7 @@ def test_timestamper_input_sets_start_timestamp_and_forwards_input() -> None:
 
     assert input_collector.received_events[0].payload == payload
     with runtime.context_store.get_context(ctx_id) as context:
-        saved_start_time = context.user_data[timestamper.processing_started_at_user_data_key]
+        saved_start_time = context.copy_user_data()[timestamper.processing_started_at_user_data_key]
     assert isinstance(saved_start_time, datetime)
     assert saved_start_time.tzinfo == UTC
     assert datetime.now(tz=UTC) - saved_start_time <= timedelta(minutes=1)
@@ -95,7 +95,7 @@ def test_timestamper_queues_output_until_first_block_beat() -> None:
 
     timestamped = output_collector.received_events[0].payload
     with runtime.context_store.get_context(ctx_id) as context:
-        saved_start_time = context.user_data[timestamper.processing_started_at_user_data_key]
+        saved_start_time = context.copy_user_data()[timestamper.processing_started_at_user_data_key]
 
     assert timestamped.executor_output == output_payload
     assert timestamped.block_at_finish == block_beat

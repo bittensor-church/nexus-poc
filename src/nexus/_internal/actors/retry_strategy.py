@@ -147,7 +147,7 @@ class RetryStrategyActor[T](Actor):
                         "No retry state found in context user data when trying to trigger next attempt? "
                         "ctx_id: %s, context user_data: %s.",
                         ctx_id,
-                        context.user_data,
+                        context.copy_user_data(),
                     )
                     return
                 self._pipe_to_bus.put(self._next_attempt_message(context, retry_state))
@@ -172,7 +172,7 @@ class RetryStrategyActor[T](Actor):
         }
 
     def _retry_state_from_context(self, ctx: Context) -> RetryState[T] | None:
-        retry_state = ctx.user_data.get(self.spec.id)
+        retry_state = ctx.copy_user_data().get(self.spec.id)
         if retry_state is None:
             return None
         if not isinstance(retry_state, RetryState):

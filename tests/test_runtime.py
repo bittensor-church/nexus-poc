@@ -352,16 +352,18 @@ def test_event_bus_routes_events_to_configured_sinks():
     assert received_a.ctx_id != received_b.ctx_id
 
     with context_store.get_context(received_a.ctx_id) as context_a:
-        assert context_a.payload == {"message": "hello"}
-        assert context_a.user_data == {"request": {"id": 42}}
-        assert len(context_a.parent_contexts) == 1
-        assert context_a.parent_contexts[0].ctx_id == ctx.id
+        parent_snapshots = context_a.copy_parent_context_snapshots()
+        assert context_a.copy_payload() == {"message": "hello"}
+        assert context_a.copy_user_data() == {"request": {"id": 42}}
+        assert len(parent_snapshots) == 1
+        assert parent_snapshots[0].ctx_id == ctx.id
 
     with context_store.get_context(received_b.ctx_id) as context_b:
-        assert context_b.payload == {"message": "hello"}
-        assert context_b.user_data == {"request": {"id": 42}}
-        assert len(context_b.parent_contexts) == 1
-        assert context_b.parent_contexts[0].ctx_id == ctx.id
+        parent_snapshots = context_b.copy_parent_context_snapshots()
+        assert context_b.copy_payload() == {"message": "hello"}
+        assert context_b.copy_user_data() == {"request": {"id": 42}}
+        assert len(parent_snapshots) == 1
+        assert parent_snapshots[0].ctx_id == ctx.id
 
     event_bus.request_stop()
     jobs.join()
@@ -399,9 +401,9 @@ def test_event_bus_appends_sent_messages_to_context_store():
     jobs.join()
 
     with context_store.get_context(ctx_one.id) as context_one:
-        assert context_one.payload == "one"
+        assert context_one.copy_payload() == "one"
     with context_store.get_context(ctx_two.id) as context_two:
-        assert context_two.payload == "two"
+        assert context_two.copy_payload() == "two"
 
 
 def test_event_bus_logs_when_no_connections(caplog: Any):

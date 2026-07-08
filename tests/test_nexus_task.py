@@ -102,7 +102,7 @@ class PendingPreparerStateErrorCollector(CollectorActor[NexusException]):
 
     @override
     def _handle(self, ctx: Context, event: ReceiveEvent[NexusException]) -> MessagesToSend:
-        self.pending_values_on_error.append(ctx.user_data.get(self.pending_user_data_key))
+        self.pending_values_on_error.append(ctx.copy_user_data().get(self.pending_user_data_key))
         return super()._handle(ctx, event)
 
 

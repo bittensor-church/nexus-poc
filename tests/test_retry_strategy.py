@@ -33,7 +33,7 @@ class RetryInput(BaseModel):
 
 def attempts_in_context(context_store: ContextStore, ctx_id: ContextId, retry_strategy_id: str) -> int:
     with context_store.get_context(ctx_id) as context:
-        retry_state = context.user_data[retry_strategy_id]
+        retry_state = context.copy_user_data()[retry_strategy_id]
         return int(retry_state.attempts)
 
 

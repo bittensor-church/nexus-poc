@@ -70,7 +70,7 @@ payload and user data.
 
 Conversely, when there's a gather point, a new context with multiple parents should be created. Multi-parent
 contexts do not implicitly merge payloads or user data. Instead, they expose ordered parent snapshots through
-`context.parent_contexts`; the gather actor should build any aggregate payload or user data explicitly.
+`context.copy_parent_context_snapshots()`; the gather actor should build any aggregate payload or user data explicitly.
 
 ### Nexus Task
 

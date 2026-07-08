@@ -196,7 +196,7 @@ class RoundRobinNeuronRouterActor[Input](NeuronRouterActor[Input]):
         return selected_neuron
 
     def _state_from_context(self, ctx: Context) -> RoundRobinRoutingState | None:
-        existing = ctx.user_data.get(self.router_spec.id)
+        existing = ctx.copy_user_data().get(self.router_spec.id)
         if existing is None:
             return None
 
