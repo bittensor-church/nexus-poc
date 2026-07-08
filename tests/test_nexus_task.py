@@ -24,6 +24,7 @@ from utils import (
     wait_until,
 )
 
+from nexus._internal.actors.task_result_preparer import pending_successful_result_user_data_key
 from nexus.v1 import (
     Actor,
     ActorBuilder,
@@ -34,11 +35,13 @@ from nexus.v1 import (
     ExecutorFailureException,
     ExecutorFailureTaskResult,
     Flow,
+    MessagesToSend,
     NexusException,
     NexusTask,
     NexusTaskName,
     PayloadCreator,
     PipeToBus,
+    ReceiveEvent,
     RetriesExhaustedException,
     RetryStrategy,
     SendEvent,
@@ -79,6 +82,28 @@ class FailingExecutorResultConverterActor(TransformActor[DummyExecutorOutput, st
     @override
     def _transform(self, ctx: Context, payload: DummyExecutorOutput) -> str:
         raise NexusException("forced converter failure")
+
+
+class PendingPreparerStateErrorCollector(CollectorActor[NexusException]):
+    pending_user_data_key: str
+    pending_values_on_error: list[object | None]
+
+    def __init__(
+        self,
+        *,
+        pipe_to_bus: PipeToBus,
+        context_store: ContextStore,
+        pending_user_data_key: str,
+        name: str = "pending-state-error-collector",
+    ) -> None:
+        super().__init__(pipe_to_bus=pipe_to_bus, context_store=context_store, name=name)
+        self.pending_user_data_key = pending_user_data_key
+        self.pending_values_on_error = []
+
+    @override
+    def _handle(self, ctx: Context, event: ReceiveEvent[NexusException]) -> MessagesToSend:
+        self.pending_values_on_error.append(ctx.user_data.get(self.pending_user_data_key))
+        return super()._handle(ctx, event)
 
 
 def assert_stored_task_result(
@@ -410,9 +435,13 @@ def test_nexus_task_emits_error_when_executor_result_converter_fails_without_ret
         context_store=builder.context_store,
         name="nexus-task-executor-output-collector",
     )
-    error_collector = CollectorActor[NexusException](
+    # This intentionally checks a private preparer cleanup slot. It is not ideal, but acceptable for this internal
+    # regression because the public symptom depends on that persisted context key being cleared before task.error.
+    pending_success_user_data_key = pending_successful_result_user_data_key(task.task_result_preparer)
+    error_collector = PendingPreparerStateErrorCollector(
         pipe_to_bus=builder.pipe_to_bus,
         context_store=builder.context_store,
+        pending_user_data_key=pending_success_user_data_key,
         name="nexus-task-error-collector",
     )
     input_source = Source[DummyTaskInput]("nexus-task-test-input-source")
@@ -465,6 +494,8 @@ def test_nexus_task_emits_error_when_executor_result_converter_fails_without_ret
     assert len(successful_task_result_collector.received_events) == 0
     assert len(executor_failure_collector.received_events) == 0
     assert len(executor_output_collector.received_events) == 0
+    assert len(error_collector.received_events) == 1
+    assert error_collector.pending_values_on_error == [None]
     assert payload_creator.attempts_by_ctx[input_ctx_id] == 1
     assert executor_communicator.attempts_by_ctx[input_ctx_id] == 1
 

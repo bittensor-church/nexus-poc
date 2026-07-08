@@ -51,6 +51,11 @@ Pipe is a connection between a source of one actor and a sink of another, formin
 the connections between sources and sinks declaratively, while the Nexus runtime creates and uses pipes to
 route messages at runtime.
 
+A source may feed multiple sinks when those downstream branches are independent pieces of work. Do not use
+fan-out for internal cleanup or compensation paths that must happen before a public outcome is emitted. In those
+cases, serialize the cleanup through one actor and emit the final success or error only after the actor has restored
+its per-context state.
+
 ### Context
 
 Every message entering a pipeline gets its own context. As the message is transformed and passed between

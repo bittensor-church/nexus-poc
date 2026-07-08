@@ -23,10 +23,10 @@ class TaskResultPreparer[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput](
 
     sink timestamped_result: timestamped executor result from the pipeline
     sink converted_public_output: public output returned from the conversion pipeline
-    sink conversion_failed: failure from the conversion pipeline, clears pending state
+    sink conversion_failed: failure from the conversion pipeline, clears pending state before error emission
     source executor_output_for_conversion: raw output to send into the conversion pipeline
     source prepared_task_result: final TaskResultToPersist ready for storage
-    source error: internal failures (e.g. duplicate or missing results)
+    source error: task result preparation failures, including cleaned conversion failures
     """
 
     timestamped_result: Sink[StoredTaskExecution[ExecutorPayload, ExecutorOutput]]
@@ -94,8 +94,13 @@ class TaskResultPreparer[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput](
         )
 
 
+def pending_successful_result_user_data_key(spec: TaskResultPreparer[Any, Any, Any]) -> str:
+    """Return the context user_data key used while a successful result waits for conversion."""
+    return f"{spec.id}-pending-successful-result"
+
+
 class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput](Actor):
-    """Track pending successful conversions and fan out prepared persistence payloads."""
+    """Track pending successful conversions and emit prepared persistence payloads or terminal preparation errors."""
 
     spec: TaskResultPreparer[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput]
     _pending_successful_result_user_data_key: str
@@ -109,7 +114,7 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
     ) -> None:
         super().__init__(name=spec.id, pipe_to_bus=pipe_to_bus, context_store=context_store)
         self.spec = spec
-        self._pending_successful_result_user_data_key = f"{self.spec.id}-pending-successful-result"
+        self._pending_successful_result_user_data_key = pending_successful_result_user_data_key(self.spec)
 
     @override
     def handlers(self) -> dict[Sink[Any], EventHandler]:
@@ -215,8 +220,14 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
     def _handle_conversion_failed(
         self,
         ctx: Context,
-        _: ReceiveEvent[NexusException],
+        event: ReceiveEvent[NexusException],
     ) -> MessagesToSend:
         if self._pending_successful_result_user_data_key in ctx.user_data:
             ctx.set_user_data(self._pending_successful_result_user_data_key, None)
-        return ()
+        return (
+            SendEvent(
+                ctx_id=ctx.id,
+                source=self.spec.error,
+                payload=event.payload,
+            ),
+        )
