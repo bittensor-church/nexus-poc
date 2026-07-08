@@ -331,7 +331,10 @@ def test_event_bus_routes_events_to_configured_sinks():
     )
 
     ctx = _create_context(context_store)
-    pipe_to_bus.put(SendEvent(ctx_id=ctx.id, source=broadcast, payload="hello"))
+    with context_store.get_context(ctx.id) as context:
+        context.set_user_data("request", {"id": 42})
+
+    pipe_to_bus.put(SendEvent(ctx_id=ctx.id, source=broadcast, payload={"message": "hello"}))
     pipe_to_bus.put(StopBusEvent())
 
     jobs = Jobs(event_bus.run_loop(), collector_a.run_loop(), collector_b.run_loop())
@@ -339,8 +342,26 @@ def test_event_bus_routes_events_to_configured_sinks():
     wait_until(lambda: len(collector_a.received_events) == 1)
     wait_until(lambda: len(collector_b.received_events) == 1)
 
-    assert [event.payload for event in collector_a.received_events] == ["hello"]
-    assert [event.payload for event in collector_b.received_events] == ["hello"]
+    received_a = collector_a.received_events[0]
+    received_b = collector_b.received_events[0]
+
+    assert received_a.payload == {"message": "hello"}
+    assert received_b.payload == {"message": "hello"}
+    assert received_a.ctx_id != ctx.id
+    assert received_b.ctx_id != ctx.id
+    assert received_a.ctx_id != received_b.ctx_id
+
+    with context_store.get_context(received_a.ctx_id) as context_a:
+        assert context_a.payload == {"message": "hello"}
+        assert context_a.user_data == {"request": {"id": 42}}
+        assert len(context_a.parent_contexts) == 1
+        assert context_a.parent_contexts[0].ctx_id == ctx.id
+
+    with context_store.get_context(received_b.ctx_id) as context_b:
+        assert context_b.payload == {"message": "hello"}
+        assert context_b.user_data == {"request": {"id": 42}}
+        assert len(context_b.parent_contexts) == 1
+        assert context_b.parent_contexts[0].ctx_id == ctx.id
 
     event_bus.request_stop()
     jobs.join()

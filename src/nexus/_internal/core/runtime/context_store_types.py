@@ -1,5 +1,5 @@
 import datetime
-from typing import NewType
+from typing import Any, NewType
 
 from pydantic import BaseModel
 
@@ -43,6 +43,26 @@ class UserNote(BaseModel):
     note: str
 
 
+class ParentContextSnapshot(BaseModel):
+    """
+    Snapshot of a parent context captured when a child context is created.
+    """
+
+    ctx_id: ContextId
+    payload: Any
+    user_data: dict[str, Any]
+
+
+class ContextDataInitialized(BaseModel):
+    """
+    Log entry representing child context initialization from parent context state.
+    """
+
+    payload: Any
+    user_data: dict[str, Any]
+    parent_contexts: tuple[ParentContextSnapshot, ...]
+
+
 class ChildContextCreated(BaseModel):
     """
     Log entry representing the creation of a child context by the current context.
@@ -67,8 +87,15 @@ class ContextCompleted(BaseModel):
     pass
 
 
-# union for exhaustive type checking
-type LogEntryData = MessageSent | UserDataChange | ChildContextCreated | ContextCreated | ContextCompleted | UserNote
+type LogEntryData = (
+    MessageSent
+    | UserDataChange
+    | UserNote
+    | ContextDataInitialized
+    | ChildContextCreated
+    | ContextCreated
+    | ContextCompleted
+)
 
 
 LogEntryId = NewType("LogEntryId", int)

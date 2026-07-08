@@ -7,6 +7,7 @@ from nexus._internal.logging_utils import get_logger
 from ..dsl.nodes import Pipes, Sink
 from .actor import Actor
 from .context_store import ContextStore
+from .context_store_types import ContextId
 from .events import PipeToBus, ReceiveEvent, SendEvent, StopActorEvent, StopBusEvent
 
 logger: logging.Logger = get_logger(__name__)
@@ -89,19 +90,28 @@ class EventBus:
         Actual message distribution logic. Recovery from the context store
         means we rebuild the contexts and then replay the messages using this function.
         """
-        events_passed_downstream = 0
-        for sink in self.connections[event.source]:
-            logger.debug(
-                "Sending event from %s to %s with payload: %s",
-                event.source.id,
-                sink.id,
-                _payload_for_log(event.payload),
-            )
-            self.sinks[sink].pipe_from_bus.put(ReceiveEvent(ctx_id=event.ctx_id, target=sink, payload=event.payload))
-            events_passed_downstream += 1
-
-        if events_passed_downstream == 0:
+        sinks = tuple(self.connections[event.source])
+        if len(sinks) == 0:
             logger.warning(
                 "No connections found for source: %s.",
                 event.source.id,
             )
+            return
+
+        if len(sinks) == 1:
+            self._pass_message_to_sink(event, sinks[0], event.ctx_id)
+            return
+
+        for sink in sinks:
+            with self.context_store.create_context(parents=(event.ctx_id,)) as child_context:
+                child_context_id = child_context.id
+            self._pass_message_to_sink(event, sink, child_context_id)
+
+    def _pass_message_to_sink[T](self, event: SendEvent[T], sink: Sink[T], ctx_id: ContextId) -> None:
+        logger.debug(
+            "Sending event from %s to %s with payload: %s",
+            event.source.id,
+            sink.id,
+            _payload_for_log(event.payload),
+        )
+        self.sinks[sink].pipe_from_bus.put(ReceiveEvent(ctx_id=ctx_id, target=sink, payload=event.payload))

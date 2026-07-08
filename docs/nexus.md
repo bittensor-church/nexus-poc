@@ -59,13 +59,18 @@ its per-context state.
 ### Context
 
 Every message entering a pipeline gets its own context. As the message is transformed and passed between
-actors, it carries the same context throughout the entire flow.
+actors, it carries the same context throughout the linear part of the flow.
 
 Contexts include an arbitrary data bag that actors can use to store persistent per-flow information. Contexts
 survive restarts — they are persisted and reloaded.
 
-Each context has a single linear lifecycle; branching actors create new child contexts. Conversely, when
-there's a gather point, a new context with multiple parents should be created.
+Each context has a single linear lifecycle. When a source fans out to multiple sinks, Nexus creates one child
+context per downstream branch. Each child records a snapshot of its parent and starts with the parent's current
+payload and user data.
+
+Conversely, when there's a gather point, a new context with multiple parents should be created. Multi-parent
+contexts do not implicitly merge payloads or user data. Instead, they expose ordered parent snapshots through
+`context.parent_contexts`; the gather actor should build any aggregate payload or user data explicitly.
 
 ### Nexus Task
 

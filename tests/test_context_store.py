@@ -220,6 +220,82 @@ def test_create_child_from_completed_parent_raises():
             pass
 
 
+def test_single_parent_child_inherits_context_data_and_records_parent_snapshot():
+    persistence = InMemoryContextStorePersistence()
+    context_store = ContextStore.recover_from(persistence).context_store
+    parent_context_id = _create_context(context_store)
+    source = Source("single-parent-source")
+
+    with context_store.get_context(parent_context_id) as parent_context:
+        parent_context.append_message(source=source, payload={"items": ["parent"]})
+        parent_context.set_user_data("request", {"id": 7})
+
+    child_context_id = _create_context(context_store, parents=(parent_context_id,))
+
+    with context_store.get_context(parent_context_id) as parent_context:
+        parent_context.append_message(source=source, payload={"items": ["updated-parent"]})
+        parent_context.set_user_data("request", {"id": 8})
+
+    with context_store.get_context(child_context_id) as child_context:
+        assert child_context.payload == {"items": ["parent"]}
+        assert child_context.user_data == {"request": {"id": 7}}
+        assert len(child_context.parent_contexts) == 1
+
+        parent_snapshot = child_context.parent_contexts[0]
+        assert parent_snapshot.ctx_id == parent_context_id
+        assert parent_snapshot.payload == {"items": ["parent"]}
+        assert parent_snapshot.user_data == {"request": {"id": 7}}
+
+
+def test_multi_parent_child_keeps_empty_state_and_records_parent_snapshots():
+    persistence = InMemoryContextStorePersistence()
+    context_store = ContextStore.recover_from(persistence).context_store
+    parent_a_id = _create_context(context_store)
+    parent_b_id = _create_context(context_store)
+    source_a = Source("parent-a-source")
+    source_b = Source("parent-b-source")
+
+    with context_store.get_context(parent_a_id) as parent_a:
+        parent_a.append_message(source=source_a, payload={"parent": "a"})
+        parent_a.set_user_data("request", {"id": "a"})
+    with context_store.get_context(parent_b_id) as parent_b:
+        parent_b.append_message(source=source_b, payload={"parent": "b"})
+        parent_b.set_user_data("request", {"id": "b"})
+
+    child_context_id = _create_context(context_store, parents=(parent_a_id, parent_b_id, parent_a_id))
+
+    with context_store.get_context(child_context_id) as child_context:
+        assert child_context.payload is None
+        assert child_context.user_data == {}
+        assert tuple(snapshot.ctx_id for snapshot in child_context.parent_contexts) == (parent_a_id, parent_b_id)
+        assert child_context.parent_contexts[0].payload == {"parent": "a"}
+        assert child_context.parent_contexts[0].user_data == {"request": {"id": "a"}}
+        assert child_context.parent_contexts[1].payload == {"parent": "b"}
+        assert child_context.parent_contexts[1].user_data == {"request": {"id": "b"}}
+
+
+def test_child_context_initial_data_and_parent_snapshots_are_recoverable():
+    persistence = InMemoryContextStorePersistence()
+    original_context_store = ContextStore.recover_from(persistence).context_store
+    parent_context_id = _create_context(original_context_store)
+    source = Source("recover-child-source")
+
+    with original_context_store.get_context(parent_context_id) as parent_context:
+        parent_context.append_message(source=source, payload={"recoverable": True})
+        parent_context.set_user_data("request", {"id": 12})
+
+    child_context_id = _create_context(original_context_store, parents=(parent_context_id,))
+
+    recovered_context_store = ContextStore.recover_from(persistence).context_store
+    with recovered_context_store.get_context(child_context_id) as recovered_child:
+        assert recovered_child.payload == {"recoverable": True}
+        assert recovered_child.user_data == {"request": {"id": 12}}
+        assert len(recovered_child.parent_contexts) == 1
+        assert recovered_child.parent_contexts[0].ctx_id == parent_context_id
+        assert recovered_child.parent_contexts[0].payload == {"recoverable": True}
+        assert recovered_child.parent_contexts[0].user_data == {"request": {"id": 12}}
+
+
 def test_recovery_ignores_completed_contexts_and_replay_messages():
     persistence = InMemoryContextStorePersistence()
     original_context_store = ContextStore.recover_from(persistence).context_store
