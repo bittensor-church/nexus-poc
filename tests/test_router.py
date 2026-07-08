@@ -146,13 +146,13 @@ def test_round_robin_router_balances_across_many_contexts(
         pylon_client_provider=pylon_provider,
     )
     setup = transform_actor_test_setup_factory(router)
-    contexts_count = 200
+    contexts_count = 2000
     payloads = [f"p-{idx}" for idx in range(contexts_count)]
     with setup.running(shutdown_timeout_seconds=1.0):
         for payload in payloads:
             setup.send(input_payload=payload)
 
-        wait_until(lambda: len(setup.processed_collector.received_events) == len(payloads), timeout=3.0)
+        wait_until(lambda: len(setup.processed_collector.received_events) == len(payloads), timeout=10.0)
 
     routed_hotkeys = [str(event.payload.target.hotkey) for event in setup.processed_collector.received_events]
     counts = Counter(routed_hotkeys)
