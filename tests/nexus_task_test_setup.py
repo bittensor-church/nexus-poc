@@ -399,7 +399,7 @@ def build_nexus_task_test_setup(
         builder.add_flows(
             task.internal_flow,
             Flow.from_connectable(input_source).then(task.input),
-            Flow.from_connectable(block_beat_source.source).then(task.block_beat),
+            Flow.from_connectable(block_beat_source.source).then(taps=[task.block_beat]),
             Flow.from_connectable(task.successful_task_result).then(successful_task_result_collector.sink),
             Flow.from_connectable(task.executor_failure).then(executor_failure_collector.sink),
             Flow.from_connectable(task.executor_output).then(executor_output_collector.sink),

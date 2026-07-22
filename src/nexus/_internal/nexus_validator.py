@@ -2,7 +2,7 @@
 import logging
 import sys
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from typing import Any
 
@@ -22,6 +22,11 @@ log = logging.getLogger("validator")
 class NexusValidator:
     """
     Base class for validator graphs built from explicit `connect(...)` wiring.
+
+    Each source can have one primary sink, which continues on the source context,
+    and any number of tap sinks, which each receive a child context. Calls of the
+    form `connect(source, sink)` declare a primary connection; use
+    `connect(source, taps=(observer,))` for isolated secondary consumers.
 
     Runtime components are discovered only from endpoints used in `connect(...)`.
     There is no separate node/task registration API.
@@ -75,13 +80,25 @@ class NexusValidator:
             except KeyboardInterrupt:
                 pass
 
-    def connect[T](self, source: Source[T], sink: Sink[T]) -> None:
-        """Connect two endpoints and register the owners of connected components."""
+    def connect[T](
+        self,
+        source: Source[T],
+        primary: Sink[T] | None = None,
+        *,
+        taps: Iterable[Sink[T]] = (),
+    ) -> None:
+        """Connect a source to an optional primary and isolated tap sinks."""
+        tap_sinks = frozenset(taps)
+        self.subnet_flow.pipes.connect(source, primary, taps=tap_sinks)
         self.subnet_flow.sources.add(source)
-        self.subnet_flow.sinks.add(sink)
-        self.subnet_flow.pipes[source].add(sink)
+        if primary is not None:
+            self.subnet_flow.sinks.add(primary)
+        self.subnet_flow.sinks.update(tap_sinks)
         self._register_endpoint_owner(source)
-        self._register_endpoint_owner(sink)
+        if primary is not None:
+            self._register_endpoint_owner(primary)
+        for tap in tap_sinks:
+            self._register_endpoint_owner(tap)
 
     def _register_endpoint_owner(self, endpoint: Source[Any] | Sink[Any]) -> None:
         owner_node = endpoint.owner_node
@@ -95,7 +112,7 @@ class NexusValidator:
     def _build_runtime(self) -> SubnetRuntime:
         connected_tasks = tuple(self._connected_tasks.values())
         for task in connected_tasks:
-            self.connect(self.subnet_clock.source, task.block_beat)
+            self.connect(self.subnet_clock.source, taps=(task.block_beat,))
 
         task_flows = [task.internal_flow for task in connected_tasks]
 

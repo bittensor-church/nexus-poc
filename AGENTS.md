@@ -41,6 +41,10 @@ Always use `uv` or `uvx`, never bare `python` or `pip`.
 - Public consumers MUST import Nexus interfaces from `nexus.v1`. Implementation modules live under
   `nexus._internal`; do not import from legacy public paths such as `nexus.actors`, `nexus.core`, `nexus.utils`, or
   `nexus.nexus_validator`.
+- Wire each source with at most one primary and explicit taps. The primary keeps the current context; every tap gets
+  an independent child context. Use taps-only wiring for broadcasts and subnet-clock consumers.
+- Use `.then(primary, taps=[...])`, `.then(taps=[...])`, or named `Targets(...)`. Do not use legacy `.then(a, b)` or
+  iterable named-route values.
 - Prefer short and concise code. Avoid deeply nested code.
 - Code MUST be well-typed. Prefer typed structures over dictionaries.
 - Be strict with domain types: avoid bare `str`/`int`/`float` for domain values when a stronger type exists.

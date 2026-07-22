@@ -55,7 +55,7 @@ def _build_runtime(
         context_store=builder.context_store,
     )
 
-    flow_in = Flow.from_connectable(block_beat_trigger).then(node.block_beat)
+    flow_in = Flow.from_connectable(block_beat_trigger).then(taps=[node.block_beat])
     flow_out = Flow.from_connectable(node.source).then(collector.sink)
 
     builder.add_flows(flow_in, flow_out).add_actors(collector)

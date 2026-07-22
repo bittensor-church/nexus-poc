@@ -51,10 +51,45 @@ Pipe is a connection between a source of one actor and a sink of another, formin
 the connections between sources and sinks declaratively, while the Nexus runtime creates and uses pipes to
 route messages at runtime.
 
-A source may feed multiple sinks when those downstream branches are independent pieces of work. Do not use
-fan-out for internal cleanup or compensation paths that must happen before a public outcome is emitted. In those
-cases, serialize the cleanup through one actor and emit the final success or error only after the actor has restored
-its per-context state.
+Every source has explicit target roles: at most one **primary** and zero or more **taps**. The primary continues the
+linear flow with the existing context. Taps are independent branches and each receives a new child context. Role is
+not inferred from the number of targets: even a sole explicitly declared tap gets a child context, while a sole plain
+target is the primary. A taps-only source broadcasts to its taps without also dispatching the parent context.
+
+Use `Flow.then` to declare the roles:
+
+```py
+from nexus.v1 import Flow, Targets
+
+Flow.from_connectable(source).then(primary)
+Flow.from_connectable(source).then(primary, taps=[audit, metrics])
+Flow.from_connectable(source).then(taps=[audit, metrics])
+
+Flow.from_connectable(fork).then(
+    left=Targets(primary=left_worker, taps=[left_audit]),
+    right=Targets(taps=[right_audit, right_metrics]),
+)
+```
+
+`Targets[T]` is immutable. Its constructor accepts any iterable of taps and stores them as a deduplicated frozenset;
+tap iteration order is not part of the API. `Pipes` maps each source to `Targets[Sink]`, so consumers inspect
+`.primary` and `.taps` rather than treating connections as a raw sink set.
+
+A plain value for a named route remains its primary. `Targets` is required when a named route needs taps. Only a
+primary target flow supplies the exit sources used by the next chained `.then(...)`; tap flows are absorbed into the
+graph but never become its outer continuation. The legacy forms `.then(a, b)` and `then(left=[a, b])` are invalid
+because they do not identify the primary. A declaration must contain at least one target, and default-source targets
+cannot be mixed with named routes. The reserved `taps` keyword configures the default source; Do not name a specific
+source `taps` - treat it as a reserved keyword.
+
+`NexusValidator.connect(source, primary, taps=[...])` uses the same roles. Existing two-argument calls remain primary
+connections; use `connect(source, taps=[...])` for clocks and other broadcasts. Repeated taps are deduplicated. A
+source cannot have two different primaries or classify the same sink as both primary and tap.
+
+A source may feed multiple sinks when those downstream branches are independent pieces of work. Do not use taps for
+internal cleanup or compensation paths that must happen before a public outcome is emitted. In those cases, serialize
+the cleanup through the primary flow and emit the final success or error only after the actor has restored its
+per-context state.
 
 ### Context
 
@@ -64,13 +99,18 @@ actors, it carries the same context throughout the linear part of the flow.
 Contexts include an arbitrary data bag that actors can use to store persistent per-flow information. Contexts
 survive restarts — they are persisted and reloaded.
 
-Each context has a single linear lifecycle. When a source fans out to multiple sinks, Nexus creates one child
-context per downstream branch. Each child records a snapshot of its parent and starts with the parent's current
-payload and user data.
+Each context has a single linear lifecycle. When a source emits, its primary receives that context unchanged. Nexus
+creates one unique child context for every tap before dispatching any target. Each child records a snapshot of its
+parent and starts with the parent's current payload and user data. Creating every child first makes all tap snapshots
+reflect the same emission state, even if the primary immediately mutates its parent context. With taps-only wiring,
+the parent is retained as the children's snapshot source but is not dispatched to a sink.
 
 Conversely, when there's a gather point, a new context with multiple parents should be created. Multi-parent
-contexts do not implicitly merge payloads or user data. Instead, they expose ordered parent snapshots through
-`context.copy_parent_context_snapshots()`; the gather actor should build any aggregate payload or user data explicitly.
+contexts do not implicitly merge payloads or user data. Instead, `context.copy_parent_context_snapshots()` exposes an
+immutable mapping from parent context ID to snapshot; the gather actor should select snapshots by ID and build any
+aggregate payload or user data explicitly. Mapping iteration order is not part of the API. Duplicate IDs passed to
+`ContextStore.create_context()` produce one parent relationship and snapshot, and are collapsed before determining
+single- versus multi-parent inheritance.
 
 ### Nexus Task
 
@@ -216,8 +256,10 @@ from `nexus._internal`.**
 
 `nexus._internal` holds implementation modules whose layout, names, and signatures may change at any time
 between versions. The versioned modules (`nexus.v1`, and future `nexus.vN`) re-export the public surface and
-are the only import path with a stability guarantee — `nexus.v1` will not change in a backwards-incompatible
-way.
+are the only import paths covered by the public compatibility policy. Nexus normally evolves a versioned surface
+compatibly, but may make a deliberate breaking correction while the project is pre-1.0 when preserving the old API
+would preserve ambiguous or unsafe semantics. Such exceptions are documented in the changelog with migration
+instructions. The explicit primary/tap target model is one such intentional `nexus.v1` break.
 
 ## Source Discovery
 

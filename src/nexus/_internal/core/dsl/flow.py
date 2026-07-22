@@ -1,99 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, NewType
+from typing import Any, NewType, cast
 
 from nexus._internal.utils.exceptions import FlowMisconfiguredException
 
-from .nodes import Node, NodeSinks, NodeSources, Pipes, Sink, SinkNode, Source, SourceName, SourceNode
+from .nodes import Node, NodeSinks, NodeSources, Pipes, Sink, SinkNode, Source, SourceName, SourceNode, Targets
 
 SinkPath = NewType("SinkPath", str)
 SourcePath = NewType("SourcePath", str)
-
-"""Example flow use:
-
-    entry: RestEntryPoint[UserImageInput] = RestEntryPoint(
-        path="/cat",
-        port=8080,
-        user_data_model=UserImageInput)
-
-    stringify: Stringify[UserImageInput] = Stringify()
-
-    upppercase_if_even: UppercaseIfEven = UppercaseIfEven()
-
-    mining_task: UppercaseOrError = UppercaseOrError()
-    printer: StringPrinter = StringPrinter()
-    validation_task: UppercaseOrError = UppercaseOrError()
-
-    validation_side_effect: StringPrinter = StringPrinter()
-    validation_error_side_effect: StringPrinter = StringPrinter()
-
-    bidi_transform: UppercaseInputLowercaseOutput = UppercaseInputLowercaseOutput()
-
-    mining_flow: Flow = (
-        # flow has some input (sink) and output (source)
-        flow(bidi_transform.input_transform)
-        # with "then" you can chain another sink; mining_task has only one sink,
-        # so there is no need to specify exactly mining_task.sink
-        .then(mining_task, printer)
-        .then(
-            # mining_task has two sources. one is named 'ok', and it should be connected to the output_transform sink
-            ok=(
-                flow(bidi_transform.output_transform)
-                .then(...)
-                .then(...)
-                .then(merge_actor))
-            # the other source is named 'error', and it should be connected to the input_transform sink; in this case
-            # the input transform sink is a backreference to an earlier node in the flow; this is fine
-            error=bidi_transform.input_transform)
-    )
-
-    validation_flow: Flow = (
-        # again, flow has some input (sink) and output (source); validation_task
-        # has only one sink, so no need to specify exactly validation_task.sink
-        flow(validation_task)
-        # validation_task has two sources; the 'ok' source is connected to two sinks: stringify and 
-        # validation_side_effect;
-        # if there was only one sink, we could just write .then(ok=stringify), but hI wonere there are two sinks,
-        # so we put them in a list
-        .then(ok=(stringify, validation_side_effect),
-              # the 'error' source is connected to validation_error_side_effect
-              error=validation_error_side_effect)
-    )
-
-    subnet_flow: Flow = (
-        # the overall subnet flow starts from the entry point; the start doesn't have a sink,
-        # it is only a source (possibly, multiple sources)
-        start(entry)
-        # this source is then connected to the fork; fork has only one sink, so no need to specify exactly fork.sink
-        .then(fork_blah)
-        .then(
-            # the 'left' source of the fork is connected to the mining_flow defined above
-            left=mining_flow,
-            # the 'right' source of the fork is connected to the validation_flow defined above
-            right=validation_flow
-        )
-    )
-
-    stringify_error: Stringify[Exception] = Stringify()
-
-    nodes = [entry, stringify, mining_task, stringify_error]
-
-    piping = Piping()
-    piping.connect(entry.source, stringify.sink)
-    piping.connect(stringify.ok, mining_task.sink)
-    piping.connect(mining_task.ok, entry.sink)
-    piping.connect(mining_task.error, stringify_error.sink)
-    piping.connect(stringify_error.ok, entry.sink)
-
-    pipe_to_bus = PipeToBus()
-    actors: list[Actor] = [node.build_actor(pipe_to_bus=pipe_to_bus) for node in nodes]
-
-    event_bus = EventBus(piping.pipes, pipe_to_bus, actors)
-
-
-"""
-
 
 type Connectable = Node | Sink[Any] | Source[Any]
 
@@ -107,6 +22,12 @@ class Flow:
     - exit_sources: the sources that can be connected further downstream
     - pipes: connections from sources to sinks
     - sources/sinks/nodes: all endpoints and components encountered in the flow
+
+    ``then(primary)`` connects the default source to one primary target, which
+    receives the existing context and supplies the next continuation. Use
+    ``then(primary, taps=[...])`` or ``then(taps=[...])`` for independent tap
+    branches, each of which receives a child context. Named routes accept a
+    plain primary or an explicit ``Targets`` value.
     """
 
     entry_sinks: NodeSinks
@@ -128,7 +49,7 @@ class Flow:
     ) -> None:
         self.entry_sinks = entry_sinks
         self.exit_sources = exit_sources
-        self.pipes = pipes or Pipes(set)
+        self.pipes = pipes if pipes is not None else Pipes()
         self.nodes = nodes or set()
         self.sinks = sinks or set()
         self.sources = sources or set()
@@ -156,17 +77,46 @@ class Flow:
         )
         return flow_object
 
-    def then(self, *targets: Connectable | Flow, **routes: Connectable | Flow | Iterable[Connectable | Flow]) -> Flow:
-        if not targets and not routes:
+    def then(
+        self,
+        *targets: Connectable | Flow,
+        taps: Iterable[Connectable | Flow] = (),
+        **routes: Connectable | Flow | Targets[Connectable | Flow],
+    ) -> Flow:
+        """
+        Connect the current exits to explicit primary and tap targets.
+
+        At most one positional target is accepted and is the primary. Named
+        routes use plain values as primaries or ``Targets`` for explicit roles.
+        Iterable named-route values are invalid; use ``Targets(taps=...)``.
+        """
+        if len(targets) > 1:
             raise FlowMisconfiguredException(
-                "expected continuation of the flow as either positional or keyword parameters"
-            )
-        if targets and routes:
-            raise FlowMisconfiguredException(
-                "expected continuation of the flow as either positional or keyword parameters"
+                "expected at most one positional primary target; declare additional targets with taps=[...]"
             )
 
-        if targets:
+        default_targets = Targets(primary=targets[0] if targets else None, taps=taps)
+        if routes and (default_targets.primary is not None or default_targets.taps):
+            raise FlowMisconfiguredException("expected targets for either the default source or named routes, not both")
+
+        if routes:
+            for source_str, route in routes.items():
+                source_name = SourceName(source_str)
+                if source_name not in self.exit_sources.sources:
+                    raise FlowMisconfiguredException(
+                        f"Unexpected connection from {source_name}; available sources: {self.exit_sources.sources}"
+                    )
+                self._connect_targets(
+                    self.exit_sources.sources[source_name],
+                    self._as_route_targets(route),
+                )
+
+            self.exit_sources = NodeSources(sources={})
+            return self
+        else:
+            if default_targets.primary is None and not default_targets.taps:
+                raise FlowMisconfiguredException("expected continuation of the flow as either a primary or tap target")
+
             source = self.exit_sources.default_source
             if source is None:
                 raise FlowMisconfiguredException(
@@ -174,73 +124,70 @@ class Flow:
                     f"exit_sources={self.exit_sources}"
                 )
 
-            continuation_exit_sources: NodeSources | None = None
-
-            for target in targets:
-                target_flow = Flow._as_flow(target)
-                if target_flow.entry_sinks.default_sink is None:
-                    raise FlowMisconfiguredException(
-                        f"No default entry sink to connect the source to the provided flow: target_flow={target_flow}"
-                    )
-
-                self._absorb(target_flow)
-                self._connect(source, target_flow.entry_sinks.default_sink)
-
-                if target_flow.exit_sources.sources:
-                    if continuation_exit_sources is not None:
-                        raise FlowMisconfiguredException(
-                            "multiple continuation targets define exit sources: "
-                            f"{continuation_exit_sources} and {target_flow.exit_sources}"
-                        )
-                    continuation_exit_sources = target_flow.exit_sources
-
-            # continuation only if there is exactly one source among the target flows
-            self.exit_sources = continuation_exit_sources or NodeSources(sources={})
+            self.exit_sources = self._connect_targets(source, default_targets)
             return self
 
-        elif routes:
-            for source_str, target in routes.items():
-                source_name = SourceName(source_str)
-                if source_name not in self.exit_sources.sources:
-                    raise FlowMisconfiguredException(
-                        f"Unexpected connection from {source_name}; available sources: {self.exit_sources.sources}"
-                    )
-                source = self.exit_sources.sources[source_name]
-
-                targets_to_connect: Iterable[Connectable | Flow] = (
-                    list(target) if isinstance(target, Iterable) else [target]
-                )
-
-                for target_item in targets_to_connect:
-                    target_flow = Flow._as_flow(target_item)
-                    if target_flow.entry_sinks.default_sink is None:
-                        raise FlowMisconfiguredException(
-                            "No default entry sink to connect the source to the provided flow: "
-                            f"target_flow={target_flow}"
-                        )
-
-                    self._absorb(target_flow)
-                    self._connect(source, target_flow.entry_sinks.default_sink)
-
-            # no direct continuation after a fork
-            self.exit_sources = NodeSources(sources={})
-            return self
-
-        else:
-            raise AssertionError("should be unreachable code")
-
-    def _connect[T](self, source: Source[T], sink: Sink[T]) -> None:
+    def _connect[T](
+        self,
+        source: Source[T],
+        primary: Sink[T] | None = None,
+        *,
+        taps: Iterable[Sink[T]] = (),
+    ) -> None:
+        tap_targets = frozenset(taps)
+        self.pipes.connect(source, primary, taps=tap_targets)
         self.sources.add(source)
-        self.sinks.add(sink)
-        self.pipes[source].add(sink)
+        if primary is not None:
+            self.sinks.add(primary)
+        self.sinks.update(tap_targets)
+
+    def _connect_targets(
+        self,
+        source: Source[Any],
+        targets: Targets[Connectable | Flow],
+    ) -> NodeSources:
+        primary_flow = Flow._as_flow(targets.primary) if targets.primary is not None else None
+        tap_flows = tuple(Flow._as_flow(target) for target in targets.taps)
+
+        primary_sink = self._default_sink(primary_flow) if primary_flow is not None else None
+        tap_sinks = frozenset(self._default_sink(target_flow) for target_flow in tap_flows)
+        self._connect(source, primary_sink, taps=tap_sinks)
+
+        if primary_flow is not None:
+            self._absorb(primary_flow)
+        for tap_flow in tap_flows:
+            self._absorb(tap_flow)
+
+        return primary_flow.exit_sources if primary_flow is not None else NodeSources(sources={})
 
     def _absorb(self, target_flow: Flow) -> None:
+        self.pipes.merge(target_flow.pipes)
         self.nodes |= target_flow.nodes
         self.sinks |= target_flow.sinks
         self.sources |= target_flow.sources
 
-        for source, sinks in target_flow.pipes.items():
-            self.pipes[source].update(sinks)
+    @staticmethod
+    def _default_sink(target_flow: Flow) -> Sink[Any]:
+        sink = target_flow.entry_sinks.default_sink
+        if sink is None:
+            raise FlowMisconfiguredException(
+                f"No default entry sink to connect the source to the provided flow: target_flow={target_flow}"
+            )
+        return sink
+
+    @staticmethod
+    def _as_route_targets(
+        target: object,
+    ) -> Targets[Connectable | Flow]:
+        if isinstance(target, Targets):
+            return cast(Targets[Connectable | Flow], target)
+        if isinstance(target, (Node, Sink, Source, Flow)):
+            return Targets(primary=cast(Connectable | Flow, target))
+        if isinstance(target, Iterable):
+            raise FlowMisconfiguredException(
+                "iterable named-route values are invalid; use Targets(primary=..., taps=[...])"
+            )
+        raise FlowMisconfiguredException(f"Expected a flow target, got {target!r}.")
 
     @staticmethod
     def _as_flow(component: Connectable | Flow) -> Flow:

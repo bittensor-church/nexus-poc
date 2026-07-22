@@ -10,6 +10,7 @@ from nexus_task_test_setup import (
 from pydantic_settings import BaseSettings
 
 from nexus.v1 import (
+    FlowMisconfiguredException,
     NexusValidator,
     NoopPayloadCreator,
     Sink,
@@ -21,6 +22,36 @@ from nexus.v1 import (
 
 class _TestSettings(BaseSettings):
     pass
+
+
+def test_connect_declares_primary_and_tap_targets() -> None:
+    validator = NexusValidator(_TestSettings())
+    source = Source[str]("source")
+    primary = Sink[str]("primary")
+    tap_a = Sink[str]("tap-a")
+    tap_b = Sink[str]("tap-b")
+
+    validator.connect(source, primary, taps=(tap for tap in (tap_a, tap_b, tap_a)))
+
+    targets = validator.subnet_flow.pipes[source]
+    assert targets.primary is primary
+    assert targets.taps == frozenset((tap_a, tap_b))
+
+
+def test_connect_rejects_an_empty_target_declaration() -> None:
+    validator = NexusValidator(_TestSettings())
+
+    with pytest.raises(FlowMisconfiguredException, match="at least one target"):
+        validator.connect(Source[str]("source"))
+
+
+def test_connect_rejects_a_sink_in_both_roles() -> None:
+    validator = NexusValidator(_TestSettings())
+    source = Source[str]("source")
+    sink = Sink[str]("sink")
+
+    with pytest.raises(FlowMisconfiguredException, match="both primary and tap"):
+        validator.connect(source, sink, taps=[sink])
 
 
 def test_validator_construction_does_not_register_passed_settings_as_subnet_settings() -> None:
@@ -76,6 +107,20 @@ def test_connect_discovers_node_without_validator_field() -> None:
     assert any("validator-local-node" in actor.actor_id for actor in runtime.actors)
 
 
+def test_connect_discovers_nodes_owned_by_tap_sinks() -> None:
+    class _TapNodeValidator(NexusValidator):
+        def __init__(self) -> None:
+            super().__init__(_TestSettings())
+            tap_node = NoopPayloadCreator[str]("validator-tap-node")
+            self.connect(Source[str]("external-upstream"), taps=[tap_node.input])
+            self.connect(tap_node.created_payload, Sink[str]("external-downstream"))
+
+    runtime = _TapNodeValidator()._build_runtime()
+
+    assert len(runtime.actors) == 1
+    assert any("validator-tap-node" in actor.actor_id for actor in runtime.actors)
+
+
 def test_build_runtime_includes_only_connected_nodes() -> None:
     class _OnlyConnectedValidator(NexusValidator):
         def __init__(self) -> None:
@@ -102,11 +147,15 @@ def test_connect_discovers_task_from_task_endpoints() -> None:
             self.connect(Source[DummyTaskInput]("task-upstream"), task.input)
             self.connect(task.successful_task_result, Sink("task-downstream"))
 
-    runtime = _TaskValidator()._build_runtime()
+    validator = _TaskValidator()
+    runtime = validator._build_runtime()
 
     expected_actor_count = len(task.internal_nodes()) + 1  # + internal subnet clock
     assert len(runtime.actors) == expected_actor_count
     assert any("internal-subnet-clock" in actor.actor_id for actor in runtime.actors)
+    clock_targets = validator.subnet_flow.pipes[validator.subnet_clock.source]
+    assert clock_targets.primary is None
+    assert clock_targets.taps == {task.block_beat}
 
 
 def test_build_runtime_allows_ownerless_external_endpoints() -> None:

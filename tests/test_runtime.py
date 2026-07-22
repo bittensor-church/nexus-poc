@@ -20,6 +20,7 @@ from nexus.v1 import (
     Flow,
     Fork,
     ForkActor,
+    InMemoryContextStorePersistence,
     MessagesToSend,
     PipeToBus,
     Piping,
@@ -125,6 +126,29 @@ class SomeDoubleTransformActor(DoubleTransformActor[str, str, str, str]):
         if payload.startswith("fail"):
             raise ValueError("output-failed")
         return f"{payload}-out"
+
+
+class RecordingPipe(queue.Queue[ReceiveEvent[Any]]):
+    def __init__(
+        self,
+        *,
+        target: Sink[Any],
+        dispatches: list[ReceiveEvent[Any]],
+        context_store: ContextStore | None = None,
+    ) -> None:
+        super().__init__()
+        self.target = target
+        self.dispatches = dispatches
+        self.context_store = context_store
+
+    @override
+    def put(self, item: ReceiveEvent[Any], block: bool = True, timeout: float | None = None) -> None:
+        if not isinstance(item, StopActorEvent) and item.target == self.target:
+            self.dispatches.append(item)
+            if self.context_store is not None:
+                with self.context_store.get_context(item.ctx_id) as context:
+                    context.set_user_data("stage", "mutated by primary")
+        super().put(item, block=block, timeout=timeout)
 
 
 def _create_context(context_store: ContextStore) -> Context:
@@ -312,7 +336,7 @@ def test_event_bus_preserves_context_id():
     jobs.join()
 
 
-def test_event_bus_routes_events_to_configured_sinks():
+def test_event_bus_routes_taps_to_distinct_child_contexts():
     context_store = empty_context_store()
     pipe_to_bus: PipeToBus = queue.Queue()
 
@@ -321,7 +345,7 @@ def test_event_bus_routes_events_to_configured_sinks():
     collector_b = CollectorActor(name="collector-b", pipe_to_bus=pipe_to_bus, context_store=context_store)
 
     piping = Piping()
-    piping.add_flow(Flow.from_connectable(broadcast).then(collector_a.sink, collector_b.sink))
+    piping.add_flow(Flow.from_connectable(broadcast).then(taps=[collector_a.sink, collector_b.sink]))
 
     event_bus = EventBus(
         connections=piping.pipes,
@@ -355,18 +379,110 @@ def test_event_bus_routes_events_to_configured_sinks():
         parent_snapshots = context_a.copy_parent_context_snapshots()
         assert context_a.copy_payload() == {"message": "hello"}
         assert context_a.copy_user_data() == {"request": {"id": 42}}
-        assert len(parent_snapshots) == 1
-        assert parent_snapshots[0].ctx_id == ctx.id
+        assert set(parent_snapshots) == {ctx.id}
+        assert parent_snapshots[ctx.id].ctx_id == ctx.id
 
     with context_store.get_context(received_b.ctx_id) as context_b:
         parent_snapshots = context_b.copy_parent_context_snapshots()
         assert context_b.copy_payload() == {"message": "hello"}
         assert context_b.copy_user_data() == {"request": {"id": 42}}
-        assert len(parent_snapshots) == 1
-        assert parent_snapshots[0].ctx_id == ctx.id
+        assert set(parent_snapshots) == {ctx.id}
+        assert parent_snapshots[ctx.id].ctx_id == ctx.id
 
     event_bus.request_stop()
     jobs.join()
+
+
+def test_event_bus_routes_a_sole_tap_to_a_child_context():
+    context_store = empty_context_store()
+    pipe_to_bus: PipeToBus = queue.Queue()
+
+    source = Source("sole-tap-source")
+    collector = CollectorActor(pipe_to_bus=pipe_to_bus, context_store=context_store)
+    piping = Piping()
+    piping.add_flow(Flow.from_connectable(source).then(taps=[collector.sink]))
+    event_bus = EventBus(
+        connections=piping.pipes,
+        input_pipe=pipe_to_bus,
+        actors=[collector],
+        context_store=context_store,
+    )
+
+    ctx = _create_context(context_store)
+    pipe_to_bus.put(SendEvent(ctx_id=ctx.id, source=source, payload="observed"))
+    jobs = Jobs(event_bus.run_loop(), collector.run_loop())
+    wait_until(lambda: len(collector.received_events) == 1)
+
+    received = collector.received_events[0]
+    assert received.ctx_id != ctx.id
+    with context_store.get_context(received.ctx_id) as child:
+        assert child.copy_payload() == "observed"
+        assert child.copy_parent_context_snapshots()[ctx.id].ctx_id == ctx.id
+
+    event_bus.request_stop()
+    jobs.join()
+
+
+def test_event_bus_snapshots_all_taps_before_dispatching_the_primary():
+    persistence = InMemoryContextStorePersistence()
+    context_store = ContextStore.recover_from(persistence).context_store
+    pipe_to_bus: PipeToBus = queue.Queue()
+
+    source = Source("primary-and-taps-source")
+    primary = CollectorActor(name="primary", pipe_to_bus=pipe_to_bus, context_store=context_store)
+    tap_a = CollectorActor(name="tap-a", pipe_to_bus=pipe_to_bus, context_store=context_store)
+    tap_b = CollectorActor(name="tap-b", pipe_to_bus=pipe_to_bus, context_store=context_store)
+    piping = Piping()
+    piping.add_flow(Flow.from_connectable(source).then(primary.sink, taps=[tap_a.sink, tap_b.sink]))
+    event_bus = EventBus(
+        connections=piping.pipes,
+        input_pipe=pipe_to_bus,
+        actors=[primary, tap_a, tap_b],
+        context_store=context_store,
+    )
+
+    dispatches: list[ReceiveEvent[Any]] = []
+    primary.pipe_from_bus = RecordingPipe(
+        target=primary.sink,
+        dispatches=dispatches,
+        context_store=context_store,
+    )
+    tap_a.pipe_from_bus = RecordingPipe(target=tap_a.sink, dispatches=dispatches)
+    tap_b.pipe_from_bus = RecordingPipe(target=tap_b.sink, dispatches=dispatches)
+
+    ctx = _create_context(context_store)
+    with context_store.get_context(ctx.id) as parent:
+        parent.set_user_data("stage", "before dispatch")
+
+    pipe_to_bus.put(SendEvent(ctx_id=ctx.id, source=source, payload={"message": "hello"}))
+    pipe_to_bus.put(StopBusEvent())
+    event_loop = event_bus.run_loop()
+    event_loop.join(1.0)
+    assert not event_loop.is_alive()
+
+    assert len(dispatches) == 3
+    assert dispatches[0].target == primary.sink
+    assert dispatches[0].ctx_id == ctx.id
+    assert {event.target for event in dispatches[1:]} == {tap_a.sink, tap_b.sink}
+
+    tap_context_ids = {event.ctx_id for event in dispatches[1:]}
+    assert len(tap_context_ids) == 2
+    assert ctx.id not in tap_context_ids
+
+    recovered_store = ContextStore.recover_from(persistence).context_store
+    with recovered_store.get_context(ctx.id) as parent:
+        assert parent.copy_payload() == {"message": "hello"}
+        assert parent.copy_user_data() == {"stage": "mutated by primary"}
+
+    for tap_context_id in tap_context_ids:
+        with recovered_store.get_context(tap_context_id) as tap_context:
+            snapshots = tap_context.copy_parent_context_snapshots()
+            assert tap_context.copy_payload() == {"message": "hello"}
+            assert tap_context.copy_user_data() == {"stage": "before dispatch"}
+            assert set(snapshots) == {ctx.id}
+            assert snapshots[ctx.id].ctx_id == ctx.id
+            assert snapshots[ctx.id].payload == {"message": "hello"}
+            assert snapshots[ctx.id].user_data == {"stage": "before dispatch"}
 
 
 def test_event_bus_appends_sent_messages_to_context_store():
@@ -428,6 +544,8 @@ def test_event_bus_logs_when_no_connections(caplog: Any):
     event_bus.request_stop()
     event_loop.join(1.0)
     assert not event_loop.is_alive()
+    with context_store.get_context(ctx.id) as context:
+        assert context.copy_payload() == "payload"
 
 
 def test_actor_error_does_not_stop_event_bus(caplog: Any):

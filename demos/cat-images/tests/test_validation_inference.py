@@ -143,8 +143,18 @@ def test_validator_connects_successful_mining_task_results_into_sampler() -> Non
     validator = Validator(_validator_settings())
 
     assert isinstance(validator.miner_result_sampler, EveryTaskResultSampler)
-    assert (
+    assert validator.subnet_flow.pipes[validator.mining_task.successful_task_result].primary == (
         validator.miner_result_sampler.task_results
-        in validator.subnet_flow.pipes[validator.mining_task.successful_task_result]
     )
-    assert validator.validation_task.input in validator.subnet_flow.pipes[validator.miner_result_sampler.sampled_batch]
+    assert validator.subnet_flow.pipes[validator.miner_result_sampler.sampled_batch].primary == (
+        validator.validation_task.input
+    )
+
+
+def test_validator_connects_weight_setting_as_a_subnet_clock_tap() -> None:
+    validator = Validator(_validator_settings())
+
+    targets = validator.subnet_flow.pipes[validator.subnet_clock.source]
+
+    assert targets.primary is None
+    assert targets.taps == frozenset({validator.set_weights_beat.block_beat})

@@ -67,7 +67,7 @@ def test_timestamper_queues_output_until_first_block_beat() -> None:
         builder.add_flows(
             Flow.from_connectable(upstream_input).then(timestamper.input),
             Flow.from_connectable(upstream_output).then(timestamper.executor_output),
-            Flow.from_connectable(upstream_block_beat).then(timestamper.block_beat),
+            Flow.from_connectable(upstream_block_beat).then(taps=[timestamper.block_beat]),
             Flow.from_connectable(timestamper.forwarded_input).then(input_collector.sink),
             Flow.from_connectable(timestamper.timestamped_output).then(output_collector.sink),
         )
@@ -124,7 +124,7 @@ def test_timestamper_uses_most_recent_block_beat_for_output() -> None:
         builder.add_flows(
             Flow.from_connectable(upstream_input).then(timestamper.input),
             Flow.from_connectable(upstream_output).then(timestamper.executor_output),
-            Flow.from_connectable(upstream_block_beat).then(timestamper.block_beat),
+            Flow.from_connectable(upstream_block_beat).then(taps=[timestamper.block_beat]),
             Flow.from_connectable(timestamper.timestamped_output).then(output_collector.sink),
         )
         .add_actors(output_collector)
@@ -167,7 +167,7 @@ def test_timestamper_drops_entries_older_than_five_minutes_when_logging_error(ca
     runtime = (
         builder.add_flows(
             Flow.from_connectable(upstream_output).then(timestamper.executor_output),
-            Flow.from_connectable(upstream_block_beat).then(timestamper.block_beat),
+            Flow.from_connectable(upstream_block_beat).then(taps=[timestamper.block_beat]),
             Flow.from_connectable(timestamper.timestamped_output).then(output_collector.sink),
         )
         .add_actors(output_collector)

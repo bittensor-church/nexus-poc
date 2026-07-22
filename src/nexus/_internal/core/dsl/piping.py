@@ -7,7 +7,10 @@ from .nodes import Pipes, Sinks, Sources
 @dataclass
 class Piping:
     """
-    DSL for defining data flow connections between Sources and Sinks.
+    Aggregate flows into one validated set of source connections.
+
+    Primary and tap declarations for repeated sources are merged through
+    ``Pipes``; conflicting primary or overlapping role declarations fail.
     """
 
     pipes: Pipes
@@ -15,12 +18,11 @@ class Piping:
     sinks: Sinks
 
     def __init__(self):
-        self.pipes = Pipes(set)
+        self.pipes = Pipes()
         self.sources = set()
         self.sinks = set()
 
-    def add_flow(self, flow: Flow):
+    def add_flow(self, flow: Flow) -> None:
+        self.pipes.merge(flow.pipes)
         self.sources.update(flow.sources)
         self.sinks.update(flow.sinks)
-        for source, sinks in flow.pipes.items():
-            self.pipes[source].update(sinks)

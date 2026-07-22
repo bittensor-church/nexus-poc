@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NewType, TypeVar, override
 
-from nexus._internal.utils.exceptions import InternalFrameworkException, NexusException
+from nexus._internal.utils.exceptions import FlowMisconfiguredException, InternalFrameworkException, NexusException
 
 if TYPE_CHECKING:
     from nexus._internal.core.runtime.nexus_task import NexusTask
@@ -292,4 +292,93 @@ class DoubleTransform[InputFrom, InputTo, OutputFrom, OutputTo](Node):
 
 Sources = set[Source[Any]]
 Sinks = set[Sink[Any]]
-Pipes = defaultdict[Source[Any], set[Sink[Any]]]
+
+
+@dataclass(frozen=True, init=False)
+class Targets[T]:
+    """
+    The primary and tap targets connected to one source.
+
+    The optional primary continues the source context. Each tap receives a new
+    child context. Any tap iterable is accepted and deduplicated into an
+    immutable set; tap ordering is intentionally unspecified.
+    """
+
+    primary: T | None
+    taps: frozenset[T]
+
+    def __init__(self, primary: T | None = None, taps: Iterable[T] = ()) -> None:
+        object.__setattr__(self, "primary", primary)
+        object.__setattr__(self, "taps", frozenset(taps))
+
+
+class Pipes(Mapping[Source[Any], Targets[Sink[Any]]]):
+    """
+    Read-only mapping view over invariant-preserving source connections.
+
+    Build the graph through ``connect`` and ``merge``. A source can have at
+    most one primary, and no sink can be both primary and tap for that source.
+    """
+
+    _targets: dict[Source[Any], Targets[Sink[Any]]]
+
+    def __init__(self) -> None:
+        self._targets = {}
+
+    def __getitem__(self, source: Source[Any]) -> Targets[Sink[Any]]:
+        return self._targets.get(source, Targets())
+
+    def __iter__(self) -> Iterator[Source[Any]]:
+        return iter(self._targets)
+
+    def __len__(self) -> int:
+        return len(self._targets)
+
+    def __contains__(self, source: object) -> bool:
+        return source in self._targets
+
+    def connect[T](
+        self,
+        source: Source[T],
+        primary: Sink[T] | None = None,
+        *,
+        taps: Iterable[Sink[T]] = (),
+    ) -> None:
+        """Add targets for ``source``, merging repeated declarations safely."""
+        targets = Targets[Sink[T]](primary=primary, taps=taps)
+        if targets.primary is None and not targets.taps:
+            raise FlowMisconfiguredException(f"Expected at least one target for source {source.id!r}.")
+
+        existing = self._targets.get(source)
+        if existing is not None:
+            targets = self._merge_targets(source, existing, targets)
+
+        self._validate_roles(source, targets)
+        self._targets[source] = targets
+
+    def merge(self, other: Pipes) -> None:
+        """Merge another connection graph while preserving target roles."""
+        for source, targets in other.items():
+            self.connect(source, targets.primary, taps=targets.taps)
+
+    @staticmethod
+    def _merge_targets[T](
+        source: Source[T], existing: Targets[Sink[T]], incoming: Targets[Sink[T]]
+    ) -> Targets[Sink[T]]:
+        if existing.primary is not None and incoming.primary is not None and existing.primary != incoming.primary:
+            raise FlowMisconfiguredException(
+                f"Source {source.id!r} cannot have multiple primary targets: "
+                f"{existing.primary.id!r} and {incoming.primary.id!r}."
+            )
+
+        return Targets(
+            primary=existing.primary if existing.primary is not None else incoming.primary,
+            taps=existing.taps | incoming.taps,
+        )
+
+    @staticmethod
+    def _validate_roles(source: Source[Any], targets: Targets[Sink[Any]]) -> None:
+        if targets.primary is not None and targets.primary in targets.taps:
+            raise FlowMisconfiguredException(
+                f"Sink {targets.primary.id!r} cannot be both primary and tap for source {source.id!r}."
+            )
