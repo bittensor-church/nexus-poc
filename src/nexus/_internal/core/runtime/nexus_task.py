@@ -154,9 +154,9 @@ class NexusTask[Input, ExecutorPayload, ExecutorOutput, ExecutorPublicOutput = E
         self.internal_flow.sources.add(self.executor_output)
 
         def connect[T](source: Source[T], sink: Sink[T]) -> None:
+            self.internal_flow.pipes.connect(source, sink)
             self.internal_flow.sources.add(source)
             self.internal_flow.sinks.add(sink)
-            self.internal_flow.pipes[source].add(sink)
 
         connect(self.retry.next_attempt, self.payload_creator.input)
         connect(self.payload_creator.created_payload, self.router.input)

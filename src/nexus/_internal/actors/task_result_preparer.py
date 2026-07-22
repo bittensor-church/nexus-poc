@@ -94,11 +94,6 @@ class TaskResultPreparer[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput](
         )
 
 
-def pending_successful_result_user_data_key(spec: TaskResultPreparer[Any, Any, Any]) -> str:
-    """Return the context user_data key used while a successful result waits for conversion."""
-    return f"{spec.id}-pending-successful-result"
-
-
 class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOutput](Actor):
     """Track pending successful conversions and emit prepared persistence payloads or terminal preparation errors."""
 
@@ -114,7 +109,7 @@ class TaskResultPreparerActor[ExecutorPayload, ExecutorOutput, ExecutorPublicOut
     ) -> None:
         super().__init__(name=spec.id, pipe_to_bus=pipe_to_bus, context_store=context_store)
         self.spec = spec
-        self._pending_successful_result_user_data_key = pending_successful_result_user_data_key(self.spec)
+        self._pending_successful_result_user_data_key = f"{spec.id}-pending-successful-result"
 
     @override
     def handlers(self) -> dict[Sink[Any], EventHandler]:

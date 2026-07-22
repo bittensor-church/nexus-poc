@@ -87,7 +87,10 @@ def _build_and_run(weighing_func: WeighingFunc, pylon_client: SyncPylonClientLik
             Flow.from_connectable(trigger).then(retry.input),
             Flow.from_connectable(retry.next_attempt).then(weight_setter.sink),
             Flow.from_connectable(weight_setter.ok).then(ok_collector.sink),
-            Flow.from_connectable(weight_setter.error).then(retry.failed_attempt, ws_error_collector.sink),
+            Flow.from_connectable(weight_setter.error).then(
+                retry.failed_attempt,
+                taps=[ws_error_collector.sink],
+            ),
             Flow.from_connectable(retry.error).then(error_collector.sink),
         )
         .add_actors(ok_collector, error_collector, ws_error_collector)

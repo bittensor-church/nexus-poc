@@ -239,10 +239,20 @@ def test_single_parent_child_inherits_context_data_and_records_parent_snapshot()
     with context_store.get_context(child_context_id) as child_context:
         assert child_context.copy_payload() == {"items": ["parent"]}
         assert child_context.copy_user_data() == {"request": {"id": 7}}
-        assert len(child_context.copy_parent_context_snapshots()) == 1
+        parent_snapshots = child_context.copy_parent_context_snapshots()
+        assert set(parent_snapshots) == {parent_context_id}
 
-        parent_snapshot = child_context.copy_parent_context_snapshots()[0]
+        parent_snapshot = parent_snapshots[parent_context_id]
         assert parent_snapshot.ctx_id == parent_context_id
+        assert parent_snapshot.payload == {"items": ["parent"]}
+        assert parent_snapshot.user_data == {"request": {"id": 7}}
+
+        child_context.append_message(source=source, payload={"items": ["updated-child"]})
+        child_context.set_user_data("request", {"id": 9})
+
+        assert child_context.copy_payload() == {"items": ["updated-child"]}
+        assert child_context.copy_user_data() == {"request": {"id": 9}}
+        parent_snapshot = child_context.copy_parent_context_snapshots()[parent_context_id]
         assert parent_snapshot.payload == {"items": ["parent"]}
         assert parent_snapshot.user_data == {"request": {"id": 7}}
 
@@ -268,11 +278,11 @@ def test_multi_parent_child_keeps_empty_state_and_records_parent_snapshots():
         parent_snapshots = child_context.copy_parent_context_snapshots()
         assert child_context.copy_payload() is None
         assert child_context.copy_user_data() == {}
-        assert tuple(snapshot.ctx_id for snapshot in parent_snapshots) == (parent_a_id, parent_b_id)
-        assert parent_snapshots[0].payload == {"parent": "a"}
-        assert parent_snapshots[0].user_data == {"request": {"id": "a"}}
-        assert parent_snapshots[1].payload == {"parent": "b"}
-        assert parent_snapshots[1].user_data == {"request": {"id": "b"}}
+        assert set(parent_snapshots) == {parent_a_id, parent_b_id}
+        assert parent_snapshots[parent_a_id].payload == {"parent": "a"}
+        assert parent_snapshots[parent_a_id].user_data == {"request": {"id": "a"}}
+        assert parent_snapshots[parent_b_id].payload == {"parent": "b"}
+        assert parent_snapshots[parent_b_id].user_data == {"request": {"id": "b"}}
 
 
 def test_child_context_initial_data_and_parent_snapshots_are_recoverable():
@@ -292,10 +302,10 @@ def test_child_context_initial_data_and_parent_snapshots_are_recoverable():
         parent_snapshots = recovered_child.copy_parent_context_snapshots()
         assert recovered_child.copy_payload() == {"recoverable": True}
         assert recovered_child.copy_user_data() == {"request": {"id": 12}}
-        assert len(parent_snapshots) == 1
-        assert parent_snapshots[0].ctx_id == parent_context_id
-        assert parent_snapshots[0].payload == {"recoverable": True}
-        assert parent_snapshots[0].user_data == {"request": {"id": 12}}
+        assert set(parent_snapshots) == {parent_context_id}
+        assert parent_snapshots[parent_context_id].ctx_id == parent_context_id
+        assert parent_snapshots[parent_context_id].payload == {"recoverable": True}
+        assert parent_snapshots[parent_context_id].user_data == {"request": {"id": 12}}
 
 
 def test_recovery_ignores_completed_contexts_and_replay_messages():

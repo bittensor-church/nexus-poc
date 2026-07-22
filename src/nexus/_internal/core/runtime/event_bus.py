@@ -90,22 +90,23 @@ class EventBus:
         Actual message distribution logic. Recovery from the context store
         means we rebuild the contexts and then replay the messages using this function.
         """
-        sinks = tuple(self.connections[event.source])
-        if len(sinks) == 0:
+        targets = self.connections[event.source]
+        if targets.primary is None and not targets.taps:
             logger.warning(
                 "No connections found for source: %s.",
                 event.source.id,
             )
             return
 
-        if len(sinks) == 1:
-            self._pass_message_to_sink(event, sinks[0], event.ctx_id)
-            return
-
-        for sink in sinks:
+        tap_events: list[tuple[Sink[Any], ContextId]] = []
+        for tap in targets.taps:
             with self.context_store.create_context(parents=(event.ctx_id,)) as child_context:
-                child_context_id = child_context.id
-            self._pass_message_to_sink(event, sink, child_context_id)
+                tap_events.append((tap, child_context.id))
+
+        if targets.primary is not None:
+            self._pass_message_to_sink(event, targets.primary, event.ctx_id)
+        for tap, child_context_id in tap_events:
+            self._pass_message_to_sink(event, tap, child_context_id)
 
     def _pass_message_to_sink[T](self, event: SendEvent[T], sink: Sink[T], ctx_id: ContextId) -> None:
         logger.debug(

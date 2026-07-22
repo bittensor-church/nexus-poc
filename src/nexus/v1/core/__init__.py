@@ -25,6 +25,7 @@ from .dsl import (
     SourceNode,
     SourcePath,
     Sources,
+    Targets,
     Transform,
 )
 from .runtime import (
@@ -154,6 +155,7 @@ __all__ = [
     "SubnetRuntime",
     "SuccessfulTaskResult",
     "SuccessfulTaskResultToPersist",
+    "Targets",
     "TaskResultBase",
     "TaskResultId",
     "TaskResultStore",

@@ -63,7 +63,9 @@ def test_epoch_beat(blocks: list[BlockNumber], beats: list[BlockNumber], delay: 
         context_store=builder.context_store,
     )
 
-    runtime = builder.add_flows(Flow.from_connectable(node.source).then(collector.sink)).add_actors(collector).build()
+    runtime = (
+        builder.add_flows(Flow.from_connectable(node.source).then(taps=[collector.sink])).add_actors(collector).build()
+    )
 
     with runtime.running(shutdown_timeout_seconds=1.0):
         wait_until(lambda: len(collector.received_events) >= len(expected_beats))
@@ -98,7 +100,9 @@ def test_epoch_beat_retries_after_transient_pylon_failure(
         pipe_to_bus=builder.pipe_to_bus,
         context_store=builder.context_store,
     )
-    runtime = builder.add_flows(Flow.from_connectable(node.source).then(collector.sink)).add_actors(collector).build()
+    runtime = (
+        builder.add_flows(Flow.from_connectable(node.source).then(taps=[collector.sink])).add_actors(collector).build()
+    )
 
     with caplog.at_level("WARNING", logger="nexus._internal.actors.chain_beat.epoch_beat"):
         with runtime.running(shutdown_timeout_seconds=1.0):

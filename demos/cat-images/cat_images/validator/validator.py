@@ -141,5 +141,5 @@ class Validator(NexusValidator):
         self.connect(self.miner_result_sampler.sampled_batch, self.validation_task.input)
 
         # weight setting
-        self.connect(self.subnet_clock.source, self.set_weights_beat.block_beat)
+        self.connect(self.subnet_clock.source, taps=[self.set_weights_beat.block_beat])
         self.connect(self.set_weights_beat.source, self.weight_setter.sink)

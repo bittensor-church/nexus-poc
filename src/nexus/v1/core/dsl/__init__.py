@@ -21,6 +21,7 @@ from nexus._internal.core.dsl.nodes import (
     SourceName,
     SourceNode,
     Sources,
+    Targets,
     Transform,
 )
 from nexus._internal.core.dsl.piping import Piping
@@ -49,5 +50,6 @@ __all__ = [
     "SourceNode",
     "SourcePath",
     "Sources",
+    "Targets",
     "Transform",
 ]
